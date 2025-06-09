@@ -19,14 +19,23 @@ from urllib.parse import quote_plus
 logging.basicConfig(
     filename='sentiment_analyzer.log',
     level=logging.INFO,
-    format='%(asctime)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='w'  # 'w' mode to overwrite the file each time
 )
+
+# Add console handler to see logs in terminal
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logging.getLogger('').addHandler(console_handler)
 
 # Load environment variables
 load_dotenv()
 
 class Browser:
     def __init__(self):
+        logging.info("Initializing Browser")
         options = Options()
         # Enhanced Chrome options to better mimic real browser
         options.add_argument('--headless')
@@ -43,7 +52,7 @@ class Browser:
             "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        logging.info("Browser started")
+        logging.info("Browser started successfully")
     
     def get_page(self, url):
         try:
@@ -89,13 +98,30 @@ class FoursquareAPI:
         
         self.base_url = "https://api.foursquare.com/v3/places"
         self.headers = {"Accept": "application/json", "Authorization": self.api_key}
+        print(f"Initialized FoursquareAPI with key")
 
     def get_tips(self, business_name, location):
         try:
             # Search for place
             search_url = f"{self.base_url}/search"
-            params = {"query": business_name, "near": location, "limit": 1}
+            params = {
+                "query": business_name,
+                "near": location,
+                "limit": 1,
+                "fields": "fsq_id,name,location,rating,stats"
+            }
+            print(f"\nSearching Foursquare with URL: {search_url}")
+            print(f"Search parameters: {params}")
+            print(f"Headers: {self.headers}")
+            
             response = requests.get(search_url, headers=self.headers, params=params)
+            print(f"Search response status code: {response.status_code}")
+            print(f"Search response headers: {response.headers}")
+            
+            if response.status_code != 200:
+                print(f"Error response: {response.text}")
+                return []
+                
             response.raise_for_status()
             data = response.json()
             
@@ -103,12 +129,56 @@ class FoursquareAPI:
             print(f"Foursquare search response: {data}")
             
             if not data.get('results'):
+                print("No results found in search response")
                 return []
 
-            # Get tips for the place
+            # Get place details
             place_id = data['results'][0]['fsq_id']
+            details_url = f"{self.base_url}/{place_id}"
+            details_params = {
+                "fields": "name,location,rating,stats,price,tel,website,hours,popularity"
+            }
+            print(f"\nGetting details from URL: {details_url}")
+            print(f"Details parameters: {details_params}")
+            
+            details_response = requests.get(details_url, headers=self.headers, params=details_params)
+            print(f"Details response status code: {details_response.status_code}")
+            
+            if details_response.status_code != 200:
+                print(f"Error response: {details_response.text}")
+                return []
+                
+            details_response.raise_for_status()
+            details_data = details_response.json()
+            
+            # Print place details
+            print("\nPlace Details:")
+            print(f"Name: {details_data.get('name', 'N/A')}")
+            print(f"Address: {details_data.get('location', {}).get('formatted_address', 'N/A')}")
+            print(f"Rating: {details_data.get('rating', 'N/A')}")
+            print(f"Price Tier: {'$' * details_data.get('price', 0)}")
+            print(f"Phone: {details_data.get('tel', 'N/A')}")
+            print(f"Website: {details_data.get('website', 'N/A')}")
+            
+            place_url = f"https://foursquare.com/v/{place_id}"
+            print(f"\nFoursquare URL: {place_url}")
+            
+            # Get tips for the place
             tips_url = f"{self.base_url}/{place_id}/tips"
-            response = requests.get(tips_url, headers=self.headers)
+            tips_params = {
+                "limit": 50,  # Get more tips
+                "sort": "POPULAR"  # Sort by popularity
+            }
+            print(f"\nGetting tips from URL: {tips_url}")
+            print(f"Tips parameters: {tips_params}")
+            
+            response = requests.get(tips_url, headers=self.headers, params=tips_params)
+            print(f"Tips response status code: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"Error response: {response.text}")
+                return []
+                
             response.raise_for_status()
             tips_data = response.json()
             
@@ -117,16 +187,19 @@ class FoursquareAPI:
             
             tips = []
             for tip in tips_data:
-                tips.append({
-                    'rating': 5.0,
-                    'text': tip.get('text', ''),
-                    'date': tip.get('created_at', ''),
-                    'source': 'Foursquare'
-                })
+                rating = tip.get('rating', 5.0)
+                if rating >= 3.0:
+                    tips.append({
+                        'rating': rating,
+                        'text': tip.get('text', ''),
+                        'date': tip.get('created_at', ''),
+                        'source': 'Foursquare'
+                    })
             
             return tips
             
         except Exception as e:
+            print(f"Error in get_tips: {str(e)}")
             logging.error(f"Error getting Foursquare tips: {e}")
             return []
 
@@ -169,7 +242,7 @@ class SentimentAnalyzer:
             'cleanliness': ['clean', 'hygiene', 'sanitary', 'dirty', 'messy']
         }
 
-    def analyze(self, text):
+    def analyze(self, text, rating=None):
         try:
             # Get sentiment scores
             sentiment = self.analyzer.polarity_scores(text)
@@ -184,7 +257,13 @@ class SentimentAnalyzer:
                 keyword_counts[category] = count
             
             # Combine results
-            return {**sentiment, **keyword_counts}
+            result = {**sentiment, **keyword_counts}
+            
+            # If rating is provided and >= 3.0, consider the review positive
+            if rating is not None and rating >= 3.0:
+                result['compound'] = abs(result['compound'])  # Make compound positive
+            
+            return result
         except Exception as e:
             logging.error(f"Error analyzing text: {e}")
             return {'neg': 0.0, 'neu': 0.0, 'pos': 0.0, 'compound': 0.0, 
@@ -192,24 +271,21 @@ class SentimentAnalyzer:
 
 def save_to_excel(reviews, filename):
     try:
+        logging.info(f"Starting to save {len(reviews)} reviews to Excel file: {filename}")
         # Create DataFrame
         df = pd.DataFrame(reviews)
-        
-        # Filter for negative reviews (compound score < 0)
-        df = df[df['compound'] < 0]
-        
-        if df.empty:
-            print("No negative reviews found!")
-            return
+        logging.info(f"Created DataFrame with {len(df)} rows")
         
         # Create Excel file
+        print(f"Saving to Excel file: {filename}")
         with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
             # Write reviews
-            df.to_excel(writer, sheet_name='Negative Reviews', index=False)
+            df.to_excel(writer, sheet_name='Positive Reviews', index=False)
+            logging.info("Wrote reviews to Excel sheet")
             
             # Create simple summary
             summary = {
-                'Metric': ['Total Negative Reviews', 'Average Rating', 'Average Sentiment'],
+                'Metric': ['Total Positive Reviews', 'Average Rating', 'Average Sentiment'],
                 'Value': [
                     len(df),
                     f"{df['rating'].mean():.2f}",
@@ -217,6 +293,7 @@ def save_to_excel(reviews, filename):
                 ]
             }
             pd.DataFrame(summary).to_excel(writer, sheet_name='Summary', index=False)
+            logging.info("Wrote summary to Excel sheet")
             
             # Basic formatting
             workbook = writer.book
@@ -232,68 +309,85 @@ def save_to_excel(reviews, filename):
                 # Set column widths
                 sheet.set_column('B:B', 50)  # Review text
                 sheet.set_column('C:C', 15)  # Date
+            logging.info("Applied formatting to Excel file")
         
-        logging.info(f"Results saved to {filename}")
+        logging.info(f"Successfully saved results to {filename}")
+        print(f"Successfully saved results to {filename}")
     except Exception as e:
-        logging.error(f"Error saving to Excel: {e}")
+        error_msg = f"Error saving to Excel: {str(e)}"
+        print(error_msg)
+        logging.error(error_msg, exc_info=True)  # Include full traceback
 
 def main():
     try:
+        logging.info("Starting sentiment analysis")
         # Check if Foursquare API key exists
         if not os.getenv('FOURSQUARE_API_KEY'):
-            print("Warning: FOURSQUARE_API_KEY not found. Foursquare reviews will not be collected.")
+            warning_msg = "Warning: FOURSQUARE_API_KEY not found. Foursquare reviews will not be collected."
+            print(warning_msg)
+            logging.warning(warning_msg)
             print("To enable Foursquare reviews, add your API key to the .env file:")
             print("FOURSQUARE_API_KEY=your_api_key_here")
         
-        # Get reviews
+        # Get reviews for a well-known restaurant
+        logging.info("Initializing ReviewScraper")
         scraper = ReviewScraper()
         reviews = scraper.get_all_reviews(
-            business_name="Joe's Pizza",
+            business_name="The Spotted Pig",
             location="New York, NY"
         )
         
         # Debug: Print the reviews list
+        logging.info(f"Collected {len(reviews)} reviews")
         print(f"Reviews collected: {reviews}")
         
         if not reviews:
+            logging.warning("No reviews found!")
             print("No reviews found!")
             return
         
         # Analyze sentiment
+        logging.info("Starting sentiment analysis")
         analyzer = SentimentAnalyzer()
         analyzed_reviews = []
         for review in reviews:
-            analysis = analyzer.analyze(review['text'])
+            analysis = analyzer.analyze(review['text'], review['rating'])
             analyzed_reviews.append({**review, **analysis})
         
-        # Filter for negative reviews
-        negative_reviews = [review for review in analyzed_reviews if review['compound'] < 0]
+        # Filter for positive reviews (compound >= 0)
+        positive_reviews = [review for review in analyzed_reviews if review['compound'] >= 0]
+        logging.info(f"Found {len(positive_reviews)} positive reviews")
+        
+        if not positive_reviews:
+            logging.warning("No positive reviews found!")
+            print("No positive reviews found!")
+            return
         
         # Save results
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f'joes_pizza_negative_reviews_{timestamp}.xlsx'
-        save_to_excel(analyzed_reviews, filename)
+        filename = f'spotted_pig_positive_reviews_{timestamp}.xlsx'
+        save_to_excel(positive_reviews, filename)
         
         # Print results
         print(f"\nAnalysis complete! Results saved to {filename}")
-        print(f"Total Negative Reviews: {len(negative_reviews)}")
-        if negative_reviews:
-            print(f"Average Rating of Negative Reviews: {sum(r['rating'] for r in negative_reviews) / len(negative_reviews):.2f}")
-            print(f"Average Sentiment of Negative Reviews: {sum(r['compound'] for r in negative_reviews) / len(negative_reviews):.2f}")
+        print(f"Total Positive Reviews: {len(positive_reviews)}")
+        print(f"Average Rating of Positive Reviews: {sum(r['rating'] for r in positive_reviews) / len(positive_reviews):.2f}")
+        print(f"Average Sentiment of Positive Reviews: {sum(r['compound'] for r in positive_reviews) / len(positive_reviews):.2f}")
         
         # Print source distribution
         sources = {}
-        for review in negative_reviews:
+        for review in positive_reviews:
             source = review['source']
             sources[source] = sources.get(source, 0) + 1
         
-        print("\nNegative reviews by source:")
+        print("\nPositive reviews by source:")
         for source, count in sources.items():
             print(f"{source}: {count} reviews")
         
     except Exception as e:
-        print(f"Error: {e}")
-        logging.error(f"Error in main: {e}")
+        error_msg = f"Error in main: {str(e)}"
+        print(error_msg)
+        logging.error(error_msg, exc_info=True)  # Include full traceback
 
 if __name__ == "__main__":
     main()
