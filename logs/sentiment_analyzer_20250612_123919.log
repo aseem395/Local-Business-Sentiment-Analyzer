@@ -1,0 +1,17 @@
+2025-06-12 12:41:18,145 - INFO - Initialized FoursquareAPI
+2025-06-12 12:41:18,148 - INFO - 
+Getting Foursquare tips for haldiram in delhi
+2025-06-12 12:41:18,149 - INFO - Searching Foursquare with URL: https://api.foursquare.com/v3/places/search
+2025-06-12 12:41:19,109 - INFO - Search response status code: 200
+2025-06-12 12:41:19,633 - INFO - Details response status code: 200
+2025-06-12 12:41:19,633 - INFO - 
+Place Details:
+2025-06-12 12:41:19,633 - INFO - Name: Haldiram's
+2025-06-12 12:41:19,633 - INFO - Address: 1454/2, Fountain, Chandni, Delhi 110006, Delhi
+2025-06-12 12:41:19,633 - INFO - Rating: 7.3
+2025-06-12 12:41:20,203 - INFO - Tips response status code: 200
+2025-06-12 12:41:20,203 - INFO - Total number of unique tips collected: 15
+2025-06-12 12:41:20,203 - INFO - 
+Total reviews collected: 15
+2025-06-12 12:41:20,300 - INFO - Starting to save 3 reviews to Excel file: reviews_20250612_124120.xlsx
+2025-06-12 12:41:20,552 - INFO - Successfully saved results to reviews_20250612_124120.xlsx

@@ -66,12 +66,9 @@ class FoursquareAPI:
                 "fields": "fsq_id,name,location,rating,stats"
             }
             logger.info(f"Searching Foursquare with URL: {search_url}")
-            logger.info(f"Search parameters: {params}")
-            logger.info(f"Headers: {self.headers}")
             
             response = requests.get(search_url, headers=self.headers, params=params)
             logger.info(f"Search response status code: {response.status_code}")
-            logger.info(f"Search response headers: {response.headers}")
             
             if response.status_code != 200:
                 logger.error(f"Error response: {response.text}")
@@ -79,9 +76,6 @@ class FoursquareAPI:
                 
             response.raise_for_status()
             data = response.json()
-            
-            # Debug: Print the search response
-            logger.info(f"Foursquare search response: {data}")
             
             if not data.get('results'):
                 logger.info("No results found in search response")
@@ -93,8 +87,6 @@ class FoursquareAPI:
             details_params = {
                 "fields": "name,location,rating,stats,price,tel,website,hours,popularity"
             }
-            logger.info(f"\nGetting details from URL: {details_url}")
-            logger.info(f"Details parameters: {details_params}")
             
             details_response = requests.get(details_url, headers=self.headers, params=details_params)
             logger.info(f"Details response status code: {details_response.status_code}")
@@ -111,47 +103,60 @@ class FoursquareAPI:
             logger.info(f"Name: {details_data.get('name', 'N/A')}")
             logger.info(f"Address: {details_data.get('location', {}).get('formatted_address', 'N/A')}")
             logger.info(f"Rating: {details_data.get('rating', 'N/A')}")
-            logger.info(f"Price Tier: {'$' * details_data.get('price', 0)}")
-            logger.info(f"Phone: {details_data.get('tel', 'N/A')}")
-            logger.info(f"Website: {details_data.get('website', 'N/A')}")
-            
-            place_url = f"https://foursquare.com/v/{place_id}"
-            logger.info(f"\nFoursquare URL: {place_url}")
             
             # Get tips for the place
             tips_url = f"{self.base_url}/{place_id}/tips"
-            tips_params = {
-                "limit": 50,  # Get more tips
-                "sort": "POPULAR"  # Sort by popularity
-            }
-            logger.info(f"\nGetting tips from URL: {tips_url}")
-            logger.info(f"Tips parameters: {tips_params}")
+            all_tips = []
+            seen_tips = set()  # Track unique tips
+            offset = 0
+            limit = 50  # Maximum allowed by the API
+            max_offset = 1000  # Maximum number of tips we want to collect
             
-            response = requests.get(tips_url, headers=self.headers, params=tips_params)
-            logger.info(f"Tips response status code: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"Error response: {response.text}")
-                return []
+            while offset < max_offset:
+                tips_params = {
+                    "limit": limit,
+                    "offset": offset,
+                    "sort": "POPULAR"
+                }
                 
-            response.raise_for_status()
-            tips_data = response.json()
+                response = requests.get(tips_url, headers=self.headers, params=tips_params)
+                logger.info(f"Tips response status code: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.error(f"Error response: {response.text}")
+                    break
+                    
+                response.raise_for_status()
+                tips_data = response.json()
+                
+                if not tips_data or len(tips_data) == 0:
+                    logger.info("No more tips available")
+                    break
+                
+                new_tips_found = False
+                for tip in tips_data:
+                    text = tip.get('text', '')
+                    if text and text not in seen_tips:
+                        seen_tips.add(text)
+                        all_tips.append({
+                            'rating': None,
+                            'text': text,
+                            'date': tip.get('created_at', ''),
+                            'source': 'Foursquare'
+                        })
+                        new_tips_found = True
+                
+                if not new_tips_found:
+                    logger.info("No new tips found in this batch, stopping collection")
+                    break
+                
+                if len(tips_data) < limit:
+                    break
+                    
+                offset += limit
             
-            # Debug: Print the tips response
-            logger.info(f"Foursquare tips response: {tips_data}")
-            
-            tips = []
-            for tip in tips_data:
-                text = tip.get('text', '')
-                if text: 
-                    tips.append({
-                        'rating': None,
-                        'text': text,
-                        'date': tip.get('created_at', ''),
-                        'source': 'Foursquare'
-                    })
-            
-            return tips
+            logger.info(f"Total number of unique tips collected: {len(all_tips)}")
+            return all_tips
             
         except Exception as e:
             logger.error(f"Error in get_tips: {str(e)}")
@@ -160,16 +165,11 @@ class FoursquareAPI:
 class ReviewScraper:
     def __init__(self):
         self.foursquare = FoursquareAPI()
-        # No Google selectors needed
-        self.selectors = {}
 
     def get_all_reviews(self, business_name, location):
         all_reviews = []
-        # Only get Foursquare tips
         logger.info(f"\nGetting Foursquare tips for {business_name} in {location}")
         foursquare_reviews = self.foursquare.get_tips(business_name, location)
-        # Debug: Print the Foursquare reviews
-        logger.info(f"Foursquare reviews: {foursquare_reviews}")
         all_reviews.extend(foursquare_reviews)
         logger.info(f"\nTotal reviews collected: {len(all_reviews)}")
         return all_reviews
@@ -215,20 +215,14 @@ class SentimentAnalyzer:
 def save_to_excel(reviews, filename):
     try:
         logger.info(f"Starting to save {len(reviews)} reviews to Excel file: {filename}")
-        # Create DataFrame
         df = pd.DataFrame(reviews)
-        logger.info(f"Created DataFrame with {len(df)} rows")
         
-        # Create Excel file
-        logger.info(f"Saving to Excel file: {filename}")
         with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
-            # Write reviews
-            df.to_excel(writer, sheet_name='Positive Reviews', index=False)
-            logger.info("Wrote reviews to Excel sheet")
+            df.to_excel(writer, sheet_name='Negative Reviews', index=False)
             
             # Create simple summary
             summary = {
-                'Metric': ['Total Positive Reviews', 'Average Rating', 'Average Sentiment'],
+                'Metric': ['Total Negative Reviews', 'Average Rating', 'Average Sentiment'],
                 'Value': [
                     len(df),
                     f"{df['rating'].mean():.2f}",
@@ -236,12 +230,10 @@ def save_to_excel(reviews, filename):
                 ]
             }
             pd.DataFrame(summary).to_excel(writer, sheet_name='Summary', index=False)
-            logger.info("Wrote summary to Excel sheet")
             
             # Basic formatting
             workbook = writer.book
             for sheet in writer.sheets.values():
-                # Format headers
                 header_format = workbook.add_format({
                     'bold': True,
                     'bg_color': '#D7E4BC'
@@ -249,90 +241,99 @@ def save_to_excel(reviews, filename):
                 for col_num, value in enumerate(df.columns.values):
                     sheet.write(0, col_num, value, header_format)
                     sheet.set_column(col_num, col_num, 15)
-                # Set column widths
                 sheet.set_column(1, 1, 50)  # Column B (review text)
                 sheet.set_column(2, 2, 15)  # Column C (date)
 
-            logger.info("Applied formatting to Excel file")
-        
-        logger.info(f"Successfully saved results to {filename}")
         logger.info(f"Successfully saved results to {filename}")
     except Exception as e:
-        error_msg = f"Error saving to Excel: {str(e)}"
-        logger.error(error_msg, exc_info=True)  # Include full traceback
+        logger.error(f"Error saving to Excel: {str(e)}", exc_info=True)
 
 def main():
     try:
         logger.info("Starting sentiment analysis")
-        # Check if Foursquare API key exists
         if not os.getenv('FOURSQUARE_API_KEY'):
             warning_msg = "Warning: FOURSQUARE_API_KEY not found. Foursquare reviews will not be collected."
             logger.warning(warning_msg)
-            logger.info(warning_msg)
-            logger.info("To enable Foursquare reviews, add your API key to the .env file:")
-            logger.info("FOURSQUARE_API_KEY=your_api_key_here")
+            return
         
-        # Get reviews for a well-known restaurant
-        logger.info("Initializing ReviewScraper")
         scraper = ReviewScraper()
         reviews = scraper.get_all_reviews(
-            business_name="The Spotted Pig",
-            location="New York, NY"
+            business_name="Olive Garden",
+            location="Times Square, New York, NY"
         )
-        
-        # Debug: Print the reviews list
-        logger.info(f"Collected {len(reviews)} reviews")
-        logger.info(f"Reviews collected: {reviews}")
         
         if not reviews:
             logger.warning("No reviews found!")
-            logger.info("No reviews found!")
             return
         
-        # Analyze sentiment
-        logger.info("Starting sentiment analysis")
         analyzer = SentimentAnalyzer()
         analyzed_reviews = []
         for review in reviews:
             analysis = analyzer.analyze(review['text'])
             analyzed_reviews.append({**review, **analysis})
         
-        # Filter for positive reviews (compound >= 0.2)
-        positive_reviews = [review for review in analyzed_reviews if review['compound'] >= 0.2]
-        logger.info(f"Found {len(positive_reviews)} positive reviews")
+        # Filter for negative reviews (compound <= -0.2 and contains negative keywords)
+        negative_keywords = [
+            # Explicit negative words
+            'bad', 'terrible', 'awful', 'horrible', 'disappointing', 'poor', 'mediocre', 'overrated', 'waste', 'never again',
+            'worst', 'avoid', 'regret', 'ripoff', 'expensive', 'rude', 'slow', 'cold', 'undercooked', 'overcooked',
+            'dirty', 'filthy', 'unclean', 'unsanitary', 'smelly', 'stale', 'tasteless', 'bland', 'dry', 'burnt',
+            'unprofessional', 'unfriendly', 'unhelpful', 'ignored', 'wait', 'crowded', 'noisy', 'loud', 'uncomfortable',
+            'overpriced', 'rip-off', 'scam', 'disgusting', 'inedible', 'spit', 'hair', 'bug', 'insect', 'complaint',
+            
+            # Subtle negative indicators
+            'expected better', 'not worth', 'would not recommend', 'disappointed', 'let down', 'fell short',
+            'could be better', 'needs improvement', 'room for improvement', 'not impressed', 'underwhelming',
+            'average at best', 'nothing special', 'skip this', 'pass on', 'think twice', 'second thoughts',
+            'not what i expected', 'not as good as', 'used to be better', 'gone downhill', 'not the same',
+            'overrated', 'overhyped', 'tourist trap', 'chain restaurant', 'generic', 'mass produced',
+            'frozen', 'microwaved', 'reheated', 'canned', 'packaged', 'pre-made', 'pre-cooked',
+            'long wait', 'slow service', 'understaffed', 'busy', 'packed', 'noisy', 'loud music',
+            'small portions', 'tiny', 'skimpy', 'not enough', 'too much', 'overpriced', 'pricey',
+            'basic', 'simple', 'plain', 'boring', 'uninspired', 'lacking', 'missing', 'forgot',
+            'mistake', 'error', 'wrong order', 'mixed up', 'confused', 'disorganized', 'chaotic',
+            'uncomfortable', 'cramped', 'tight', 'squeezed', 'no space', 'no privacy', 'too close',
+            'temperature', 'too hot', 'too cold', 'lukewarm', 'room temperature', 'not fresh',
+            'greasy', 'oily', 'soggy', 'mushy', 'tough', 'chewy', 'rubbery', 'stringy',
+            'artificial', 'fake', 'processed', 'chemical', 'preserved', 'preservatives',
+            'not authentic', 'not traditional', 'americanized', 'watered down', 'diluted',
+            'not worth the price', 'overcharged', 'hidden fees', 'extra charge', 'surprise charge',
+            'not what was advertised', 'misleading', 'false advertising', 'different from menu',
+            'not as described', 'not as pictured', 'not as shown', 'not as promised'
+        ]
+        negative_reviews = [
+            review for review in analyzed_reviews 
+            if review['compound'] <= -0.2 and 
+            any(keyword in review['text'].lower() for keyword in negative_keywords)
+        ]
         
-        if not positive_reviews:
-            logger.warning("No positive reviews found!")
-            logger.info("No positive reviews found!")
+        if not negative_reviews:
+            logger.warning("No negative reviews found!")
             return
         
-        # Save results
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f'spotted_pig_positive_reviews_{timestamp}.xlsx'
-        save_to_excel(positive_reviews, filename)
+        filename = f'olive_garden_negative_reviews_{timestamp}.xlsx'
+        save_to_excel(negative_reviews, filename)
         
-        # Print results
         logger.info(f"\nAnalysis complete! Results saved to {filename}")
-        logger.info(f"Total Positive Reviews: {len(positive_reviews)}")
-        if positive_reviews:
-            avg_rating = sum(r['rating'] for r in positive_reviews) / len(positive_reviews)
-            avg_sentiment = sum(r['compound'] for r in positive_reviews) / len(positive_reviews)
+        logger.info(f"Total Negative Reviews: {len(negative_reviews)}")
+        if negative_reviews:
+            avg_rating = sum(r['rating'] for r in negative_reviews) / len(negative_reviews)
+            avg_sentiment = sum(r['compound'] for r in negative_reviews) / len(negative_reviews)
             logger.info(f"Average Rating: {avg_rating:.2f}")
             logger.info(f"Average Sentiment: {avg_sentiment:.2f}")
         
-        # Print source distribution
         sources = {}
-        for review in positive_reviews:
+        for review in negative_reviews:
             source = review['source']
             sources[source] = sources.get(source, 0) + 1
         
-        logger.info("\nPositive reviews by source:")
+        logger.info("\nNegative reviews by source:")
         for source, count in sources.items():
             logger.info(f"{source}: {count} reviews")
         
     except Exception as e:
-        error_msg = f"Error in main: {str(e)}"
-        logger.error(error_msg, exc_info=True)  # Include full traceback
+        logger.error(f"Error in main: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()
